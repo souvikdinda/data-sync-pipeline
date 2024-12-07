@@ -5,10 +5,16 @@ import (
 	"csye7255-project-one/services"
 	"csye7255-project-one/utils"
 	"encoding/json"
+	"fmt"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
+)
+
+var (
+	index     = "plans"
+	queueName = "plan_requests"
 )
 
 func CreateRecord(c *gin.Context) {
@@ -45,11 +51,18 @@ func CreateRecord(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch saved data from Redis"})
 		return
 	}
+
+	if err := PublishOperationToQueue("POST", index, plan.ObjectId, plan); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to publish message to RabbitMQ"})
+		return
+	}
+
 	savedRecordJSON, err := json.Marshal(savedRecord)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to convert record to JSON"})
 		return
 	}
+
 	etag := utils.GenerateETag(savedRecordJSON)
 	c.Header("ETag", etag)
 	c.JSON(http.StatusCreated, savedRecord)
@@ -178,6 +191,11 @@ func PatchRecord(c *gin.Context) {
 		return
 	}
 
+	if err := PublishOperationToQueue("PATCH", index, id, plan); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to publish operation to RabbitMQ"})
+		return
+	}
+
 	savedRecord, err := services.GetRecord(plan.ObjectId)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch saved data from Redis"})
@@ -249,6 +267,11 @@ func PutRecord(c *gin.Context) {
 		return
 	}
 
+	if err := PublishOperationToQueue("PUT", index, id, newRecord); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to publish operation to RabbitMQ"})
+		return
+	}
+
 	savedRecord, err := services.GetRecord(id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch saved data from Redis"})
@@ -306,5 +329,26 @@ func DeleteRecord(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete data from Redis"})
 		return
 	}
+
+	if err := PublishOperationToQueue("DELETE", index, id, nil); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to publish delete operation to RabbitMQ"})
+		return
+	}
+
 	c.Status(http.StatusNoContent)
+}
+
+func PublishOperationToQueue(operation, index, docID string, payload interface{}) error {
+	message := map[string]interface{}{
+		"operation": operation,
+		"index":     index,
+		"doc_id":    docID,
+		"payload":   payload,
+	}
+	messageJSON, err := json.Marshal(message)
+	if err != nil {
+		return fmt.Errorf("failed to serialize message: %v", err)
+	}
+
+	return services.PublishMessage(queueName, messageJSON)
 }

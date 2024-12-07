@@ -13,14 +13,18 @@ import (
 	"os"
 	"sync"
 
+	"github.com/elastic/go-elasticsearch/v8"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/joho/godotenv"
+	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/redis/go-redis/v9"
 )
 
 var (
-	RedisClient *redis.Client
-	Ctx         = context.Background()
+	RedisClient  *redis.Client
+	Ctx          = context.Background()
+	RabbitMQConn *amqp.Connection
+	ESClient     *elasticsearch.Client
 
 	googleCertsURL = "https://www.googleapis.com/oauth2/v3/certs"
 	googleCerts    map[string]*rsa.PublicKey
@@ -52,6 +56,40 @@ func SetupRedis() {
 	} else {
 		fmt.Println("Connected to Redis successfully!")
 	}
+}
+
+func SetupRabbitMQ() {
+	var err error
+	rabbitMQURL := fmt.Sprintf("amqp://%s:%s@%s:%s/", os.Getenv("RABBITMQ_USER"), os.Getenv("RABBITMQ_PASSWORD"), os.Getenv("RABBITMQ_HOST"), os.Getenv("RABBITMQ_PORT"))
+	RabbitMQConn, err = amqp.Dial(rabbitMQURL)
+	if err != nil {
+		fmt.Printf("Failed to connect to RabbitMQ: %v\n", err)
+		panic(err)
+	} else {
+		fmt.Println("Connected to RabbitMQ successfully!")
+	}
+}
+
+func GetRabbitMQChannel() (*amqp.Channel, error) {
+	if RabbitMQConn == nil {
+		return nil, errors.New("RabbitMQ connection is not initialized")
+	}
+	return RabbitMQConn.Channel()
+}
+
+func SetupElasticsearch() {
+	cfg := elasticsearch.Config{
+		Addresses: []string{
+			os.Getenv("ELASTICSEARCH_URL"),
+		},
+	}
+
+	client, err := elasticsearch.NewClient(cfg)
+	if err != nil {
+		log.Fatalf("Error creating Elasticsearch client: %s", err)
+	}
+	ESClient = client
+	fmt.Println("Connected to Elasticsearch successfully!")
 }
 
 func FetchGoogleCerts() error {
